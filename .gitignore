@@ -1,0 +1,12 @@
+# 编译产物
+build_out/
+build/
+
+# 测试工程的中间文件
+AclNNInvocation/input/*.bin
+AclNNInvocation/output/*.bin
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

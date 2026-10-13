@@ -1,0 +1,11 @@
+# 统一按 LF 存储与检出。
+# 本项目包含在 Linux 上执行的 shell 脚本，CRLF 会导致
+#   bash: ./build.sh: /bin/bash^M: bad interpreter
+# 显式声明可覆盖全局的 core.autocrlf=true。
+* text=auto eol=lf
+
+# 二进制文件不做转换
+*.run binary
+*.so  binary
+*.bin binary
+*.o   binary
