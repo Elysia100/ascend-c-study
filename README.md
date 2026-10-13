@@ -14,16 +14,19 @@ INFO: you have passed the Precision!
 
 ```
 .
-├── TanhCustom/              算子工程
-│   ├── build.sh             编译入口
-│   ├── CMakePresets.json    CANN 路径等编译配置
-│   ├── framework/           TensorFlow 插件（脚手架自带）
-│   ├── op_host/             host 侧：Tiling 结构体、TilingFunc、OpDef
-│   └── op_kernel/           kernel 侧：核函数实现
-└── docs/
-    ├── 01-环境搭建与踩坑.md
-    └── 02-算子设计说明.md
+├── .gitattributes           强制 LF 换行
+├── .gitignore
+├── README.md
+└── TanhCustom/              算子工程
+    ├── build.sh             编译入口
+    ├── CMakePresets.json    CANN 路径等编译配置
+    ├── framework/           TensorFlow 插件（脚手架自带）
+    ├── op_host/             host 侧：Tiling 结构体、TilingFunc、OpDef
+    └── op_kernel/           kernel 侧：核函数实现
 ```
+
+`.gitattributes` 固定 `eol=lf`。若检出成 CRLF，Linux 下执行 `build.sh` 会报
+`bad interpreter: /bin/bash^M`，这是换行符导致的问题，与代码无关。
 
 ## 环境要求
 
@@ -35,25 +38,23 @@ INFO: you have passed the Precision!
 ## 编译与测试
 
 ```bash
-# 1. 配置环境变量（路径按实际安装位置修改）
 source /opt/atomgit/Ascend/cann-9.2.0-beta.2/set_env.sh
 
-# 2. 修改 CMakePresets.json 中的 ASCEND_CANN_PACKAGE_PATH 指向同一路径
-#    build.sh 走 cmake --preset=default，这是唯一配置入口，命令行无法覆盖
+# CMakePresets.json 的 ASCEND_CANN_PACKAGE_PATH 需指向同一路径。
+# build.sh 走 cmake --preset=default，这是唯一配置入口，命令行无法覆盖。
 
-# 3. 编译
 cd TanhCustom
 rm -rf build_out
 bash build.sh
 
-# 4. 安装算子包（不要加 --install）
 cd build_out
 ./custom_opp_ubuntu_aarch64.run
 
-# 5. 精度测试（AclNNInvocation 为测试工程，需与 TanhCustom 同级）
 cd ../../AclNNInvocation
 ASCEND_HOME_DIR=/opt/atomgit/Ascend/cann-9.2.0-beta.2 bash run.sh
 ```
+
+改完配置必须 `rm -rf build_out`，否则 CMake 缓存里的旧路径继续生效。
 
 ## 算子说明
 
@@ -66,3 +67,21 @@ ASCEND_HOME_DIR=/opt/atomgit/Ascend/cann-9.2.0-beta.2 bash run.sh
 | Tiling | `BLOCK_DIM=8`、`TILE_NUM=8`、`BUFFER_NUM=2` |
 
 算法：`tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))`
+
+## 两个关键设计点
+
+**中间量用 fp32。** float16 只有 10 位尾数，直接计算 `e^x - e^-x` 会因有效位抵消产生误差；这种误差绝对值很小，能通过 `1e-3` 判据，却会让算子在真实模型里失效。因此先 `Cast` 到 fp32 全程计算，最后再收窄回 fp16。
+
+**收窄用 CAST_RINT。** 即 IEEE754 就近舍入到偶数，与 numpy `astype(np.float16)` 行为一致——精度比对的真值正是 numpy 生成的，舍入方式不对齐会在无意义的地方产生误差。
+
+## Tiling 参数推导
+
+```
+blockLength = totalLength / GetBlockNum()          = 16384 / 8 = 2048
+tileLength  = blockLength / tileNum / BUFFER_NUM   = 2048 / 8 / 2 = 128
+loopCount   = tileNum * BUFFER_NUM                 = 16
+```
+
+自洽性校验：`loopCount × tileLength = 16 × 128 = 2048 = blockLength`，每核循环 16 次正好覆盖其负责的 2048 个元素。
+
+`tileLength` 要除以 `BUFFER_NUM`，因为 `Process()` 的循环次数是 `tileNum * BUFFER_NUM` 而非 `tileNum`；不除会导致单核搬运总量越界。
